@@ -5,7 +5,13 @@ import httpx
 import redis
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
-from scrapers import scrape_startech, scrape_ryans, scrape_pickaboo, scrape_techland
+from scrapers import (
+    scrape_startech,
+    scrape_ryans,
+    scrape_pickaboo,
+    scrape_techland,
+    scrape_daraz,
+)
 
 app = FastAPI(title="CompareLive API")
 
@@ -47,17 +53,24 @@ async def search_pipeline(q: str = Query(..., min_length=2)):
         return {"engine": "local-fallback", "results": data, "data": data}
 
     # 3. Live scraping from all stores
-    async with httpx.AsyncClient(limits=httpx.Limits(max_connections=30), follow_redirects=True) as client:
+    async with httpx.AsyncClient(limits=httpx.Limits(max_connections=40), follow_redirects=True) as client:
         tasks = [
             scrape_startech(client, q),
             scrape_ryans(client, q),
             scrape_pickaboo(client, q),
             scrape_techland(client, q),
+            scrape_daraz(client, q),
         ]
         raw_payloads = await asyncio.gather(*tasks)
 
-    filtered = [item for item in raw_payloads if item is not None]
-    sorted_deals = sorted(filtered, key=lambda x: x["price"])
+    # Flatten all results from all stores
+    all_results = []
+    for store_results in raw_payloads:
+        if store_results:
+            all_results.extend(store_results)
+
+    # Sort by price (lowest first)
+    sorted_deals = sorted(all_results, key=lambda x: x["price"])
 
     # 4. Save to cache
     if sorted_deals:
