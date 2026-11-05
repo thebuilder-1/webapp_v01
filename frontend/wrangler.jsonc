@@ -8,7 +8,7 @@
   ],
   "assets": {
     "directory": ".open-next/assets",
-    "binding": "ASUS"
+    "binding": "ASSETS"
   },
   "observability": {
     "enabled": true
