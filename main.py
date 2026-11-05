@@ -1,71 +1,261 @@
-import os
-import json
-import asyncio
 import httpx
-import redis
-from fastapi import FastAPI, Query
-from fastapi.middleware.cors import CORSMiddleware
-from scrapers import scrape_startech, scrape_ryans, scrape_pickaboo, scrape_techland
+from bs4 import BeautifulSoup
+import re
+from urllib.parse import quote_plus
 
-app = FastAPI(title="CompareLive API")
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+}
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+def parse_price(text: str) -> int:
+    if not text:
+        return 0
 
-redis_url = os.getenv("REDIS_URL")
-r_cache = None
-local_backup_cache = {}
+    # Find all numbers (with or without commas)
+    numbers = re.findall(r'[\d,]+', text)
+    
+    if not numbers:
+        return 0
 
-if redis_url:
+    # Convert all found numbers to integers
+    prices = []
+    for num in numbers:
+        clean = num.replace(",", "")
+        if clean.isdigit():
+            prices.append(int(clean))
+
+    if not prices:
+        return 0
+
+    # Return the lowest price (usually the discounted/current price)
+    return min(prices)
+
+async def scrape_startech(client: httpx.AsyncClient, query: str) -> dict | None:
+    url = f"https://www.startech.com.bd/product/search?search={quote_plus(query)}"
     try:
-        r_cache = redis.Redis.from_url(redis_url, decode_responses=True)
+        response = await client.get(url, headers=HEADERS, timeout=8.0, follow_redirects=True)
+        if response.status_code != 200:
+            return None
+
+        soup = BeautifulSoup(response.text, "html.parser")
+        card = soup.select_one(".p-item")
+        if not card:
+            return None
+
+        name_el = card.select_one(".p-item-name a") or card.select_one("h4 a")
+        price_el = card.select_one(".p-item-price") or card.select_one(".price")
+        img_el = card.select_one(".p-item-img img") or card.select_one("img")
+        link_el = name_el
+
+        if not name_el or not price_el:
+            return None
+
+        name = name_el.get_text(strip=True)
+        price = parse_price(price_el.get_text())
+        if price == 0:
+            return None
+
+        product_url = link_el.get("href", "")
+        if product_url and not product_url.startswith("http"):
+            product_url = "https://www.startech.com.bd" + product_url
+
+        image_url = ""
+        if img_el:
+            image_url = img_el.get("src") or img_el.get("data-src") or ""
+            if image_url and not image_url.startswith("http"):
+                image_url = "https://www.startech.com.bd" + image_url
+
+        return {
+            "shop_name": "Star Tech",
+            "product_name": name,
+            "price": price,
+            "product_url": product_url,
+            "image_url": image_url,
+            "availability": "Out of Stock" if "Out of Stock" in card.get_text() else "In Stock",
+        }
     except Exception:
-        r_cache = None
+        return None
 
-@app.get("/api/search")
-async def search_pipeline(q: str = Query(..., min_length=2)):
-    cache_key = f"q:{q.strip().lower()}"
+async def scrape_ryans(client: httpx.AsyncClient, query: str) -> dict | None:
+    url = f"https://www.ryans.com/search?q={quote_plus(query)}"
+    try:
+        response = await client.get(url, headers=HEADERS, timeout=8.0, follow_redirects=True)
+        if response.status_code != 200:
+            return None
 
-    # 1. Try Redis cache
-    if r_cache:
-        try:
-            hits = r_cache.get(cache_key)
-            if hits:
-                data = json.loads(hits)
-                return {"engine": "redis-cache", "results": data, "data": data}
-        except Exception:
-            pass
+        soup = BeautifulSoup(response.text, "html.parser")
+        card = (
+            soup.select_one(".category-single-product")
+            or soup.select_one(".product-item")
+            or soup.select_one(".product-box")
+            or soup.select_one(".card")
+        )
+        if not card:
+            return None
 
-    # 2. Try local memory fallback
-    if cache_key in local_backup_cache:
-        data = local_backup_cache[cache_key]
-        return {"engine": "local-fallback", "results": data, "data": data}
+        name_el = (
+            card.select_one("a.product-title")
+            or card.select_one(".product-title")
+            or card.select_one("h2 a")
+            or card.select_one("h3 a")
+            or card.select_one("a")
+        )
+        price_el = (
+            card.select_one(".price")
+            or card.select_one(".product-price")
+            or card.select_one(".pr-text")
+            or card.select_one(".price-new")
+        )
+        img_el = card.select_one("img")
+        link_el = name_el
 
-    # 3. Live scraping from all stores
-    async with httpx.AsyncClient(limits=httpx.Limits(max_connections=30), follow_redirects=True) as client:
-        tasks = [
-            scrape_startech(client, q),
-            scrape_ryans(client, q),
-            scrape_pickaboo(client, q),
-            scrape_techland(client, q),
-        ]
-        raw_payloads = await asyncio.gather(*tasks)
+        if not name_el or not price_el:
+            return None
 
-    filtered = [item for item in raw_payloads if item is not None]
-    sorted_deals = sorted(filtered, key=lambda x: x["price"])
+        name = name_el.get_text(strip=True)
+        price = parse_price(price_el.get_text())
+        if price == 0:
+            return None
 
-    # 4. Save to cache
-    if sorted_deals:
-        local_backup_cache[cache_key] = sorted_deals
-        if r_cache:
-            try:
-                r_cache.setex(cache_key, 900, json.dumps(sorted_deals))
-            except Exception:
-                pass
+        product_url = link_el.get("href", "") if link_el else ""
+        if product_url and not product_url.startswith("http"):
+            product_url = "https://www.ryans.com" + product_url
 
-    return {"engine": "live-scan", "results": sorted_deals, "data": sorted_deals}
+        image_url = ""
+        if img_el:
+            image_url = img_el.get("src") or img_el.get("data-src") or ""
+            if image_url and not image_url.startswith("http"):
+                image_url = "https://www.ryans.com" + image_url
+
+        return {
+            "shop_name": "Ryans",
+            "product_name": name,
+            "price": price,
+            "product_url": product_url,
+            "image_url": image_url,
+            "availability": "In Stock",
+        }
+    except Exception:
+        return None
+
+async def scrape_pickaboo(client: httpx.AsyncClient, query: str) -> dict | None:
+    url = f"https://www.pickaboo.com/search?q={quote_plus(query)}"
+    try:
+        response = await client.get(url, headers=HEADERS, timeout=8.0, follow_redirects=True)
+        if response.status_code != 200:
+            return None
+
+        soup = BeautifulSoup(response.text, "html.parser")
+        card = (
+            soup.select_one(".product-item")
+            or soup.select_one(".product-card")
+            or soup.select_one(".product")
+            or soup.select_one("[class*='product']")
+        )
+        if not card:
+            return None
+
+        name_el = (
+            card.select_one(".product-title")
+            or card.select_one("h2 a")
+            or card.select_one("h3 a")
+            or card.select_one("a")
+        )
+        price_el = (
+            card.select_one(".price")
+            or card.select_one(".product-price")
+            or card.select_one("[class*='price']")
+        )
+        img_el = card.select_one("img")
+        link_el = name_el
+
+        if not name_el or not price_el:
+            return None
+
+        name = name_el.get_text(strip=True)
+        price = parse_price(price_el.get_text())
+        if price == 0:
+            return None
+
+        product_url = link_el.get("href", "") if link_el else ""
+        if product_url and not product_url.startswith("http"):
+            product_url = "https://www.pickaboo.com" + product_url
+
+        image_url = ""
+        if img_el:
+            image_url = img_el.get("src") or img_el.get("data-src") or ""
+            if image_url and not image_url.startswith("http"):
+                image_url = "https://www.pickaboo.com" + image_url
+
+        return {
+            "shop_name": "Pickaboo",
+            "product_name": name,
+            "price": price,
+            "product_url": product_url,
+            "image_url": image_url,
+            "availability": "In Stock",
+        }
+    except Exception:
+        return None
+
+async def scrape_techland(client: httpx.AsyncClient, query: str) -> dict | None:
+    url = f"https://www.techlandbd.com/index.php?route=product/search&search={quote_plus(query)}"
+    try:
+        response = await client.get(url, headers=HEADERS, timeout=8.0, follow_redirects=True)
+        if response.status_code != 200:
+            return None
+
+        soup = BeautifulSoup(response.text, "html.parser")
+        card = (
+            soup.select_one(".product-thumb")
+            or soup.select_one(".product-layout")
+            or soup.select_one(".product-item")
+            or soup.select_one(".product")
+        )
+        if not card:
+            return None
+
+        name_el = (
+            card.select_one(".caption h4 a")
+            or card.select_one("h4 a")
+            or card.select_one(".name a")
+            or card.select_one("a")
+        )
+        price_el = (
+            card.select_one(".price")
+            or card.select_one(".price-new")
+            or card.select_one("[class*='price']")
+        )
+        img_el = card.select_one("img")
+        link_el = name_el
+
+        if not name_el or not price_el:
+            return None
+
+        name = name_el.get_text(strip=True)
+        price = parse_price(price_el.get_text())
+        if price == 0:
+            return None
+
+        product_url = link_el.get("href", "") if link_el else ""
+        if product_url and not product_url.startswith("http"):
+            product_url = "https://www.techlandbd.com" + product_url
+
+        image_url = ""
+        if img_el:
+            image_url = img_el.get("src") or img_el.get("data-src") or ""
+            if image_url and not image_url.startswith("http"):
+                image_url = "https://www.techlandbd.com" + image_url
+
+        return {
+            "shop_name": "TechLand",
+            "product_name": name,
+            "price": price,
+            "product_url": product_url,
+            "image_url": image_url,
+            "availability": "In Stock",
+        }
+    except Exception:
+        return None
