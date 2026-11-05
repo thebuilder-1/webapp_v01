@@ -15,3 +15,6 @@ services:
   - type: keyvalue
     name: compare-live-cache
     plan: free
+    ipAllowList:
+      - cidr: 0.0.0.0/0
+        description: internal web service routing pipeline
