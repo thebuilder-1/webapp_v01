@@ -23,29 +23,24 @@ def parse_price(text: str) -> int:
     return min(prices) if prices else 0
 
 def is_relevant(product_name: str, query: str) -> bool:
-    """Simple relevance check"""
     product_name = product_name.lower()
     query = query.lower()
-
-    # Important keywords that should appear
     keywords = [word for word in query.split() if len(word) > 2]
-
     if not keywords:
         return True
-
-    # At least 50% of important keywords must be present
     matched = sum(1 for word in keywords if word in product_name)
     return matched >= max(1, len(keywords) // 2)
 
-async def scrape_startech(client: httpx.AsyncClient, query: str) -> dict | None:
+async def scrape_startech(client: httpx.AsyncClient, query: str) -> list:
     url = f"https://www.startech.com.bd/product/search?search={quote_plus(query)}"
+    results = []
     try:
         response = await client.get(url, headers=HEADERS, timeout=8.0, follow_redirects=True)
         if response.status_code != 200:
-            return None
+            return results
 
         soup = BeautifulSoup(response.text, "html.parser")
-        cards = soup.select(".p-item")[:5]  # Check first 5 products
+        cards = soup.select(".p-item")[:8]
 
         for card in cards:
             name_el = card.select_one(".p-item-name a") or card.select_one("h4 a")
@@ -74,27 +69,28 @@ async def scrape_startech(client: httpx.AsyncClient, query: str) -> dict | None:
                 if image_url and not image_url.startswith("http"):
                     image_url = "https://www.startech.com.bd" + image_url
 
-            return {
+            results.append({
                 "shop_name": "Star Tech",
                 "product_name": name,
                 "price": price,
                 "product_url": product_url,
                 "image_url": image_url,
                 "availability": "Out of Stock" if "Out of Stock" in card.get_text() else "In Stock",
-            }
-        return None
+            })
+        return results
     except Exception:
-        return None
+        return results
 
-async def scrape_ryans(client: httpx.AsyncClient, query: str) -> dict | None:
+async def scrape_ryans(client: httpx.AsyncClient, query: str) -> list:
     url = f"https://www.ryans.com/search?q={quote_plus(query)}"
+    results = []
     try:
         response = await client.get(url, headers=HEADERS, timeout=8.0, follow_redirects=True)
         if response.status_code != 200:
-            return None
+            return results
 
         soup = BeautifulSoup(response.text, "html.parser")
-        cards = soup.select(".category-single-product, .product-item, .product-box, .card")[:5]
+        cards = soup.select(".category-single-product, .product-item, .product-box, .card")[:8]
 
         for card in cards:
             name_el = (
@@ -134,27 +130,28 @@ async def scrape_ryans(client: httpx.AsyncClient, query: str) -> dict | None:
                 if image_url and not image_url.startswith("http"):
                     image_url = "https://www.ryans.com" + image_url
 
-            return {
+            results.append({
                 "shop_name": "Ryans",
                 "product_name": name,
                 "price": price,
                 "product_url": product_url,
                 "image_url": image_url,
                 "availability": "In Stock",
-            }
-        return None
+            })
+        return results
     except Exception:
-        return None
+        return results
 
-async def scrape_pickaboo(client: httpx.AsyncClient, query: str) -> dict | None:
+async def scrape_pickaboo(client: httpx.AsyncClient, query: str) -> list:
     url = f"https://www.pickaboo.com/search?q={quote_plus(query)}"
+    results = []
     try:
         response = await client.get(url, headers=HEADERS, timeout=8.0, follow_redirects=True)
         if response.status_code != 200:
-            return None
+            return results
 
         soup = BeautifulSoup(response.text, "html.parser")
-        cards = soup.select(".product-item, .product-card, .product, [class*='product']")[:5]
+        cards = soup.select(".product-item, .product-card, .product, [class*='product']")[:8]
 
         for card in cards:
             name_el = (
@@ -192,27 +189,28 @@ async def scrape_pickaboo(client: httpx.AsyncClient, query: str) -> dict | None:
                 if image_url and not image_url.startswith("http"):
                     image_url = "https://www.pickaboo.com" + image_url
 
-            return {
+            results.append({
                 "shop_name": "Pickaboo",
                 "product_name": name,
                 "price": price,
                 "product_url": product_url,
                 "image_url": image_url,
                 "availability": "In Stock",
-            }
-        return None
+            })
+        return results
     except Exception:
-        return None
+        return results
 
-async def scrape_techland(client: httpx.AsyncClient, query: str) -> dict | None:
+async def scrape_techland(client: httpx.AsyncClient, query: str) -> list:
     url = f"https://www.techlandbd.com/index.php?route=product/search&search={quote_plus(query)}"
+    results = []
     try:
         response = await client.get(url, headers=HEADERS, timeout=8.0, follow_redirects=True)
         if response.status_code != 200:
-            return None
+            return results
 
         soup = BeautifulSoup(response.text, "html.parser")
-        cards = soup.select(".product-thumb, .product-layout, .product-item, .product")[:5]
+        cards = soup.select(".product-thumb, .product-layout, .product-item, .product")[:8]
 
         for card in cards:
             name_el = (
@@ -250,14 +248,63 @@ async def scrape_techland(client: httpx.AsyncClient, query: str) -> dict | None:
                 if image_url and not image_url.startswith("http"):
                     image_url = "https://www.techlandbd.com" + image_url
 
-            return {
+            results.append({
                 "shop_name": "TechLand",
                 "product_name": name,
                 "price": price,
                 "product_url": product_url,
                 "image_url": image_url,
                 "availability": "In Stock",
-            }
-        return None
+            })
+        return results
     except Exception:
-        return None
+        return results
+
+async def scrape_daraz(client: httpx.AsyncClient, query: str) -> list:
+    """Experimental - Daraz is heavily protected, may not work reliably"""
+    url = f"https://www.daraz.com.bd/catalog/?q={quote_plus(query)}"
+    results = []
+    try:
+        response = await client.get(url, headers=HEADERS, timeout=10.0, follow_redirects=True)
+        if response.status_code != 200:
+            return results
+
+        soup = BeautifulSoup(response.text, "html.parser")
+        cards = soup.select("[data-qa-locator='product-item'], .gridItem--Yd0tX, .Bm3ON")[:6]
+
+        for card in cards:
+            name_el = card.select_one("a") or card.select_one(".title--wFj93")
+            price_el = card.select_one(".price--NVB62") or card.select_one("[class*='price']")
+            img_el = card.select_one("img")
+            link_el = name_el
+
+            if not name_el or not price_el:
+                continue
+
+            name = name_el.get_text(strip=True) or name_el.get("title", "")
+            if not name or not is_relevant(name, query):
+                continue
+
+            price = parse_price(price_el.get_text())
+            if price == 0:
+                continue
+
+            product_url = link_el.get("href", "") if link_el else ""
+            if product_url and not product_url.startswith("http"):
+                product_url = "https:" + product_url if product_url.startswith("//") else "https://www.daraz.com.bd" + product_url
+
+            image_url = ""
+            if img_el:
+                image_url = img_el.get("src") or img_el.get("data-src") or ""
+
+            results.append({
+                "shop_name": "Daraz",
+                "product_name": name,
+                "price": price,
+                "product_url": product_url,
+                "image_url": image_url,
+                "availability": "In Stock",
+            })
+        return results
+    except Exception:
+        return results
