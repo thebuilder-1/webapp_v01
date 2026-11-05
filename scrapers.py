@@ -12,8 +12,25 @@ HEADERS = {
 def parse_price(text: str) -> int:
     if not text:
         return 0
-    nums = re.sub(r"[^\d]", "", text)
-    return int(nums) if nums else 0
+
+    # Find all numbers (with or without commas)
+    numbers = re.findall(r'[\d,]+', text)
+    
+    if not numbers:
+        return 0
+
+    # Convert all found numbers to integers
+    prices = []
+    for num in numbers:
+        clean = num.replace(",", "")
+        if clean.isdigit():
+            prices.append(int(clean))
+
+    if not prices:
+        return 0
+
+    # Return the lowest price (usually the discounted/current price)
+    return min(prices)
 
 async def scrape_startech(client: httpx.AsyncClient, query: str) -> dict | None:
     url = f"https://www.startech.com.bd/product/search?search={quote_plus(query)}"
