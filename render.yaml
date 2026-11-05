@@ -8,10 +8,10 @@ services:
     envVars:
       - key: REDIS_URL
         fromService:
-          type: kv
+          type: keyvalue
           name: compare-live-cache
           property: connectionString
 
-  - type: kv
+  - type: keyvalue
     name: compare-live-cache
     plan: free
