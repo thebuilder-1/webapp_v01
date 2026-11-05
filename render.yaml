@@ -12,6 +12,6 @@ services:
           name: compare-live-cache
           property: connectionString
 
-keyvalues:
-  - name: compare-live-cache
+  - type: kv
+    name: compare-live-cache
     plan: free
