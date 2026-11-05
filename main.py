@@ -9,10 +9,11 @@ from scrapers import scrape_startech, scrape_ryans
 
 app = FastAPI(title="CompareLive API")
 
+# Explicit cross-origin handling to bridge Cloudflare Pages frontend requests safely
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], 
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -24,8 +25,7 @@ local_backup_cache = {}
 if redis_url:
     try:
         r_cache = redis.Redis.from_url(redis_url, decode_responses=True)
-    except Exception:
-        r_cache = None
+    except Exception: pass
 
 @app.get("/api/search")
 async def search_pipeline(q: str = Query(..., min_length=2)):
@@ -34,13 +34,13 @@ async def search_pipeline(q: str = Query(..., min_length=2)):
     if r_cache:
         try:
             hits = r_cache.get(cache_key)
-            if hits: return {"engine": "redis-cache", "data": json.loads(hits)}
+            if hits: return {"engine": "redis-cache", "results": json.loads(hits), "data": json.loads(hits)}
         except Exception: pass
             
     if cache_key in local_backup_cache:
-        return {"engine": "local-fallback", "data": local_backup_cache[cache_key]}
+        return {"engine": "local-fallback", "results": local_backup_cache[cache_key], "data": local_backup_cache[cache_key]}
 
-    async with httpx.AsyncClient(limits=httpx.Limits(max_connections=20)) as client:
+    async with httpx.AsyncClient(limits=httpx.Limits(max_connections=20), follow_redirects=True) as client:
         tasks = [scrape_startech(client, q), scrape_ryans(client, q)]
         raw_payloads = await asyncio.gather(*tasks)
         
@@ -53,4 +53,4 @@ async def search_pipeline(q: str = Query(..., min_length=2)):
             try: r_cache.setex(cache_key, 900, json.dumps(sorted_deals))
             except Exception: pass
 
-    return {"engine": "live-scan", "data": sorted_deals}
+    return {"engine": "live-scan", "results": sorted_deals, "data": sorted_deals}
